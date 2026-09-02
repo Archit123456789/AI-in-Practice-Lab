@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""Lab 1, Parts B and C — the extractor you actually ship.
+"""Lab 1, Parts B and C — ticket extraction."""
 
-Complete the TODOs. `run_eval.py` imports `extract_b` and `extract_c` from
-here, so keep those two function names.
-"""
 from __future__ import annotations
 
 import re
@@ -15,169 +12,505 @@ from pydantic import BaseModel, Field, field_validator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from aip.guards import _PII_PATTERNS  # noqa: E402
-from aip.llm import StructuredOutputError, structured  # noqa: E402
+from aip.guards import _PII_PATTERNS
+from aip.llm import StructuredOutputError, structured
 
-CATEGORIES = Literal["billing", "claims", "policy_change",
-                     "technical", "complaint", "information"]
+
+CATEGORIES = Literal[
+    "billing",
+    "claims",
+    "policy_change",
+    "technical",
+    "complaint",
+    "information",
+]
 
 
 # ===========================================================================
-# PART B — the schema
+# PART B — full model schema
 # ===========================================================================
+
 class TicketRecord(BaseModel):
-    """The contract. Everything the model is allowed to say, and nothing else.
+    """
+    Full schema for Part B.
 
-    Remember from T2 §3.2: field `description`s are shipped to the model as
-    part of the JSON Schema. They are the highest-leverage place to put an
-    instruction, because they sit next to the thing they govern. Write them as
-    instructions to the model, not as documentation for a human.
+    Evidence is deliberately first because it gives the model the
+    justification before the classification fields.
     """
 
-    # TODO B1a: Should `evidence` be declared here, BEFORE the fields it
-    #           justifies, or after them? T2 §3.3. Decide, move it, and leave
-    #           a one-line comment saying which effect you chose and why.
+    evidence: str = Field(
+        max_length=200,
+        description=(
+            "Quote verbatim the shortest span of the ticket that determined "
+            "the category. One sentence at most."
+        ),
+    )
 
     category: CATEGORIES = Field(
-        description="TODO B1b: define each of the six categories in one clause "
-                    "each. Pay particular attention to the boundary between "
-                    "'complaint' and the category the complaint is about."
+        description=(
+            "Choose exactly one category. "
+            "billing = money in, including premiums, debits, refunds, "
+            "invoices, 80D tax certificates or instalments; "
+            "claims = an actual or intended insurance claim such as cashless, "
+            "reimbursement, settlement amount, deduction or rejection; "
+            "policy_change = altering the contract, including adding or "
+            "removing a member, upgrading, porting or changing contact "
+            "details; "
+            "technical = the app, portal, OTP, login, locator or document "
+            "upload is broken; "
+            "complaint = Aurora's conduct itself is the subject, such as "
+            "mis-selling, being kept on hold or an ignored grievance; "
+            "information = a general question with no pending transaction. "
+            "If a customer is angry about a claim but still wants the claim "
+            "processed, choose claims, not complaint."
+        ),
     )
 
     urgency: int = Field(
-        ge=1, le=5,
-        description="TODO B1c: define the 1-5 scale concretely. Anchor at least "
-                    "points 1, 3 and 5 with a describable situation. If you do "
-                    "not define the scale, the model invents one, and it will "
-                    "not be the one the gold labels use."
+        ge=1,
+        le=5,
+        description=(
+            "Use this exact urgency scale. "
+            "1 = answerable from general product knowledge or self-service "
+            "without opening the customer's record. "
+            "2 = Aurora must look up this customer's account, act on it, "
+            "fix a defect, or a transaction is in flight. "
+            "3 = something has already gone wrong or is stuck and the "
+            "customer is waiting. "
+            "4 = repeated failure to resolve, money or access is at risk now, "
+            "or the customer threatens escalation. "
+            "5 = emergency in progress, formal denial demanding immediate "
+            "reversal, or the customer explicitly states they are filing "
+            "with the Ombudsman. "
+            "Add 1 if there is a same-day or next-morning deadline, capped "
+            "at 5. "
+            "Do not increase urgency merely because the customer is angry."
+        ),
     )
 
-    # TODO B1d: sentiment  -> Literal["angry","frustrated","neutral","satisfied"]
-    # TODO B1e: product    -> Literal["bronze","silver","gold","platinum","unknown"]
-    #           Note "unknown" is a legal value. Say explicitly when to use it.
-    # TODO B1f: language   -> Literal["en","hi-en"]
-    # TODO B1g: evidence   -> str, max_length=200, "the span of the ticket that
-    #           determined the category, quoted verbatim"
+    sentiment: Literal[
+        "angry",
+        "frustrated",
+        "neutral",
+        "satisfied",
+    ] = Field(
+        description=(
+            "Classify tone only. "
+            "angry = hostile, shouting or threatening; "
+            "frustrated = unhappy and refers to a prior failure, repeat "
+            "attempt, unanswered request, delay or something not working; "
+            "neutral = matter-of-fact first-time request without prior "
+            "failure; "
+            "satisfied = thanks or praise."
+        ),
+    )
 
-    # Part B only: the model decides these. In Part C you will delete them
-    # from this schema and compute them in code instead.
+    product: Literal[
+        "bronze",
+        "silver",
+        "gold",
+        "platinum",
+        "unknown",
+    ] = Field(
+        description=(
+            "Use bronze, silver, gold or platinum only when the plan is "
+            "explicitly named in the ticket. Otherwise use unknown. "
+            "Never infer the plan from the context, policy number or "
+            "sum insured."
+        ),
+    )
+
+    language: Literal["en", "hi-en"] = Field(
+        description=(
+            "Use hi-en if Hindi words are mixed with English, including "
+            "transliterated Hindi in Latin script such as jaldi, kripya, "
+            "bahut or turant. Otherwise use en."
+        ),
+    )
+
     policy_number: str | None = Field(
         default=None,
-        description="TODO B1h: state the exact format, and state explicitly "
-                    "that null is required when no policy number appears. "
-                    "Forbid inventing or reformatting one."
-    )
-    contains_pii: bool = Field(
-        default=False,
-        description="TODO B1i"
+        description=(
+            "Copy a policy number only from the live/current customer "
+            "message. It must be exactly AUR- followed by 7 digits. "
+            "Return null if no such number appears in the live message. "
+            "Never invent, alter or reformat a number. "
+            "Quoted reply history beginning with > must not be used."
+        ),
     )
 
-    # Set by our code, never by the model.
+    contains_pii: bool = Field(
+        default=False,
+        description=(
+            "True if the finished ticket contains a phone number or an "
+            "email address other than Aurora's published "
+            "support@aurorahealth.example or "
+            "grievance@aurorahealth.example addresses. "
+            "A person's name alone does not count as PII for this dataset."
+        ),
+    )
+
     needs_human_review: bool = False
     review_reason: str = ""
 
-    @field_validator("policy_number")
+    @field_validator("policy_number", mode="before")
     @classmethod
-    def _policy_format(cls, v: str | None) -> str | None:
-        # TODO B1j: reject anything that is not exactly AUR-<7 digits>.
-        #           Return None rather than raising if the model returned an
-        #           empty string or the literal "null" -- decide which of those
-        #           two behaviours you want and defend it in your report.
+    def _policy_format(cls, v):
+        if v is None:
+            return None
+
+        v = str(v).strip()
+
+        if v.lower() in {"", "null", "none", "n/a"}:
+            return None
+
+        if not re.fullmatch(r"AUR-\d{7}", v):
+            raise ValueError(
+                "policy_number must exactly match AUR-<7 digits>"
+            )
+
         return v
 
 
+# ===========================================================================
+# PART B — system prompt
+# ===========================================================================
+
 SYSTEM_PROMPT = """\
-TODO B2: write this using the seven-component structure from T2 §2.
+You are a reliable support-ticket extraction system.
 
-Order it for attention AND for prompt caching: stable instructions first,
-volatile data last. The ticket text is injected by the caller, after this.
+Extract structured information from the customer ticket.
 
-It should be shorter than your first instinct. Most of what you want to say
-belongs in the field descriptions above.
+Follow the JSON Schema field descriptions exactly.
+
+Important rules:
+1. Use only information present in the ticket.
+2. Never invent a policy number or product.
+3. Category must follow the distinction between claims and complaint.
+4. Urgency must follow the exact 1-5 scale in the schema.
+5. Sentiment is tone only and must not be confused with urgency.
+6. Policy numbers must come from the live message, not quoted history.
+7. Return only the structured object required by the schema.
+
+The ticket text follows.
 """
 
 
 def extract_b(ticket: str) -> TicketRecord:
-    """Part B: the model decides everything."""
-    # TODO B3: call aip.llm.structured with TicketRecord.
-    # TODO B4: catch StructuredOutputError and return a record with
-    #          needs_human_review=True. This function must never raise.
-    raise NotImplementedError
+    """Part B: the model decides all extraction fields."""
+
+    try:
+        return structured(
+            ticket,
+            schema=TicketRecord,
+            system=SYSTEM_PROMPT,
+        )
+
+    except StructuredOutputError as e:
+        return TicketRecord(
+            evidence="",
+            category="information",
+            urgency=1,
+            sentiment="neutral",
+            product="unknown",
+            language="en",
+            policy_number=None,
+            contains_pii=False,
+            needs_human_review=True,
+            review_reason=str(e),
+        )
 
 
 # ===========================================================================
-# PART C — move the deterministic work out of the model
+# PART C — deterministic extraction
 # ===========================================================================
+
 POLICY_RE = re.compile(r"\bAUR-\d{7}\b")
-
-# The quoted-reply marker. Everything after this is history, not the current
-# message. Part C3 asks you to decide what that means for policy extraction.
 QUOTE_MARKER = re.compile(r"^\s*>", re.MULTILINE)
 
 
 def extract_deterministic(ticket: str) -> dict:
-    """TODO C1: return {'policy_number', 'contains_pii'} without a model call.
-
-    policy_number:
-        Find AUR-<7 digits>.
-
-    TODO C3 -- the trap. Some tickets contain TWO policy-number-shaped strings:
-        one in the live body, and one in a quoted reply below a '>' line from
-        an earlier thread. They are not always the same number.
-
-        Decide a rule. Write it down in a comment right here. Implement it.
-        Then ask yourself whether it generalises or whether you have fitted it
-        to this dataset -- the honest answer is worth marks.
-
-    contains_pii:
-        True if the ticket contains a phone number or an email address.
-        aip.guards._PII_PATTERNS has the patterns. Note that a *name* alone
-        does not count for this dataset's labels -- check the gold data and
-        say in your report whether you think that definition is right.
     """
-    raise NotImplementedError
+    Compute policy_number and contains_pii without an LLM.
 
+    Policy-number rule:
+    Only use a policy number from the live/current message. Once a line
+    beginning with '>' is encountered, everything after it is treated as
+    quoted conversation history and ignored for policy extraction.
+
+    PII rule:
+    Scan the complete finished ticket, including quoted material. This is
+    intentional because the dataset's contains_pii label is based on the
+    final text, not only the live body.
+    """
+
+    # ---------------------------------------------------------------
+    # POLICY NUMBER
+    # ---------------------------------------------------------------
+
+    quote_match = QUOTE_MARKER.search(ticket)
+
+    if quote_match:
+        live_text = ticket[:quote_match.start()]
+    else:
+        live_text = ticket
+
+    policy_matches = POLICY_RE.findall(live_text)
+
+    policy_number = (
+        policy_matches[0]
+        if policy_matches
+        else None
+    )
+
+    # ---------------------------------------------------------------
+    # PII
+    # ---------------------------------------------------------------
+
+    contains_pii = False
+
+    for pattern in _PII_PATTERNS.values():
+        if pattern.search(ticket):
+            # Aurora's own published support addresses do NOT count.
+            if pattern.pattern == _PII_PATTERNS["EMAIL"].pattern:
+                emails = pattern.findall(ticket)
+
+                for email in emails:
+                    email_lower = email.lower()
+
+                    if email_lower not in {
+                        "support@aurorahealth.example",
+                        "grievance@aurorahealth.example",
+                    }:
+                        contains_pii = True
+                        break
+
+            else:
+                contains_pii = True
+
+        if contains_pii:
+            break
+
+    return {
+        "policy_number": policy_number,
+        "contains_pii": contains_pii,
+    }
+
+
+# ===========================================================================
+# PART C — business rules
+# ===========================================================================
 
 def apply_business_rules(rec_fields: dict, ticket: str) -> dict:
-    """TODO C1b: compute `escalate` in code.
-
-        escalate = urgency >= 4 or 'ombudsman' appears in the ticket
-
-    This is a business rule. It belongs in code where it can be read by a
-    compliance officer, changed without touching a prompt, and unit-tested.
-    Write the unit test in tests/ while you are here.
     """
-    raise NotImplementedError
+    Compute deterministic business rules.
 
+    escalate = urgency >= 4 OR 'ombudsman' appears anywhere in the ticket.
+    """
+
+    result = dict(rec_fields)
+
+    urgency = result.get("urgency", 1)
+
+    result["escalate"] = (
+        urgency >= 4
+        or "ombudsman" in ticket.lower()
+    )
+
+    return result
+
+
+# ===========================================================================
+# PART C — reduced model schema
+# ===========================================================================
 
 class TicketRecordC(BaseModel):
-    """TODO C2: the reduced schema the model sees in Part C.
-
-    Copy TicketRecord and delete the fields you now compute in code. Fewer
-    fields means a shorter prompt, fewer output tokens, and three fields at
-    100% accuracy. Measure all three effects.
     """
+    Reduced schema.
+
+    policy_number, contains_pii and escalate are deliberately removed
+    because they are deterministic and should be computed by code.
+    """
+
+    evidence: str = Field(
+        max_length=200,
+        description=(
+            "Quote verbatim the shortest span of the ticket that determined "
+            "the category. One sentence at most."
+        ),
+    )
+
+    category: CATEGORIES = Field(
+        description=(
+            "Choose exactly one. "
+            "billing = money in, including premiums, debits, refunds, "
+            "invoices, 80D tax certificates or instalments; "
+            "claims = an actual or intended claim such as cashless, "
+            "reimbursement, settlement amount, deduction or rejection; "
+            "policy_change = altering the contract, including members, "
+            "upgrades, porting or contact details; "
+            "technical = the app, portal, OTP, login, locator or document "
+            "upload is broken; "
+            "complaint = Aurora's conduct itself is the subject; "
+            "information = a question with no pending transaction. "
+            "An angry claim remains claims if the customer wants the claim "
+            "processed."
+        ),
+    )
+
+    urgency: int = Field(
+        ge=1,
+        le=5,
+        description=(
+            "Use this exact urgency scale. "
+            "1 = general product knowledge or self-service how-to with no "
+            "customer lookup. "
+            "2 = Aurora must look up this customer's account, act on it, "
+            "fix a defect, or a transaction is in flight. "
+            "3 = something has gone wrong or is stuck and the customer is "
+            "waiting. "
+            "4 = repeated failure to resolve, money/access at risk now, "
+            "or an explicit escalation threat. "
+            "5 = emergency in progress, formal denial demanding immediate "
+            "reversal, or customer explicitly says they are filing with "
+            "the Ombudsman. "
+            "Add 1 for a same-day or next-morning deadline, capped at 5. "
+            "Anger alone does not increase urgency."
+        ),
+    )
+
+    sentiment: Literal[
+        "angry",
+        "frustrated",
+        "neutral",
+        "satisfied",
+    ] = Field(
+        description=(
+            "Tone only. "
+            "angry = hostile, shouting or threatening; "
+            "frustrated = unhappy and refers to a prior failure, repeat "
+            "attempt, unanswered request, delay or something not working; "
+            "neutral = matter-of-fact first-time request; "
+            "satisfied = thanks or praise."
+        ),
+    )
+
+    product: Literal[
+        "bronze",
+        "silver",
+        "gold",
+        "platinum",
+        "unknown",
+    ] = Field(
+        description=(
+            "Use bronze, silver, gold or platinum only when explicitly "
+            "named in the ticket. Otherwise use unknown. Never infer it."
+        ),
+    )
+
+    language: Literal["en", "hi-en"] = Field(
+        description=(
+            "Use hi-en when Hindi words are mixed with English, including "
+            "transliterated Hindi such as jaldi, kripya, bahut or turant. "
+            "Otherwise use en."
+        ),
+    )
+
+
+SYSTEM_PROMPT_C = """\
+You are a reliable support-ticket classification system.
+
+Classify the customer ticket using only information present in the ticket.
+
+Make judgement calls only for:
+- category
+- urgency
+- sentiment
+- product
+- language
+- evidence
+
+Follow the JSON Schema descriptions exactly.
+
+Important:
+- Do not invent information.
+- Distinguish complaint from the category of the underlying request.
+- Use the exact urgency scale provided.
+- Sentiment is tone only.
+- Product must be explicitly named.
+- Return only the JSON object required by the schema.
+
+The ticket text follows.
+"""
 
 
 def extract_c(ticket: str) -> dict:
-    """Part C: model for judgement, code for everything else.
-
-    Returns a plain dict (model fields + deterministic fields + business rules)
-    so that run_eval.py can score it against the gold labels directly.
     """
-    raise NotImplementedError
+    Part C.
 
+    LLM handles judgement.
+    Python handles deterministic extraction and business rules.
+    """
+
+    try:
+        model_record = structured(
+            ticket,
+            schema=TicketRecordC,
+            system=SYSTEM_PROMPT_C,
+        )
+
+    except StructuredOutputError as e:
+        return {
+            "evidence": "",
+            "category": "information",
+            "urgency": 1,
+            "sentiment": "neutral",
+            "product": "unknown",
+            "language": "en",
+            "policy_number": None,
+            "contains_pii": False,
+            "escalate": True,
+            "needs_human_review": True,
+            "review_reason": str(e),
+        }
+
+    # Model judgement fields
+    result = model_record.model_dump()
+
+    # Deterministic fields
+    deterministic = extract_deterministic(ticket)
+    result.update(deterministic)
+
+    # Business rule
+    result = apply_business_rules(result, ticket)
+
+    # Defaults
+    result.setdefault("needs_human_review", False)
+    result.setdefault("review_reason", "")
+
+    return result
+
+
+# ===========================================================================
+# MANUAL TEST
+# ===========================================================================
 
 if __name__ == "__main__":
     import json
 
     root = Path(__file__).resolve().parents[2]
+
     sample = json.loads(
-        (root / "data/eval/extraction_dev.jsonl").open(encoding="utf-8").readline()
+        (
+            root / "data/eval/extraction_dev.jsonl"
+        ).open(encoding="utf-8").readline()
     )
+
     print("--- ticket ---")
     print(sample["input"][:600])
+
     print("\n--- gold ---")
     print(sample["expected"])
+
     print("\n--- yours ---")
     print(extract_c(sample["input"]))
