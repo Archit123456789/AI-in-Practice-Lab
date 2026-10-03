@@ -1,0 +1,90 @@
+{
+  "n_questions": 42,
+  "excluded_questions": ["Q36", "Q38", "Q39"],
+  "exclusion_reason": "no relevant document; recall undefined",
+
+  "A_chunking": {
+    "A1_strategy_at_800": {
+      "fixed":     {"hit_rate@1": 0.7381, "hit_rate@5": 0.9524, "recall@5": 0.8373, "mrr": 0.8387, "ndcg@10": 0.7952, "n_chunks": 83,  "build_s": 0.03},
+      "sliding":   {"hit_rate@1": 0.7857, "hit_rate@5": 0.9286, "recall@5": 0.8452, "mrr": 0.8451, "ndcg@10": 0.8053, "n_chunks": 91,  "build_s": 0.02},
+      "recursive": {"hit_rate@1": 0.7619, "hit_rate@5": 0.9524, "recall@5": 0.8750, "mrr": 0.8611, "ndcg@10": 0.8251, "n_chunks": 98,  "build_s": 0.03},
+      "markdown":  {"hit_rate@1": 0.7619, "hit_rate@5": 0.9762, "recall@5": 0.8988, "mrr": 0.8720, "ndcg@10": 0.8458, "n_chunks": 164, "build_s": 0.04}
+    },
+    "winner_A1": "markdown",
+    "A2_size_sweep_on_markdown": {
+      "400":  {"hit_rate@1": 0.7857, "hit_rate@5": 0.9762, "recall@5": 0.9028, "mrr": 0.8800, "ndcg@10": 0.8527, "n_chunks": 235},
+      "800":  {"hit_rate@1": 0.7619, "hit_rate@5": 0.9762, "recall@5": 0.8988, "mrr": 0.8720, "ndcg@10": 0.8458, "n_chunks": 164},
+      "1600": {"hit_rate@1": 0.7143, "hit_rate@5": 0.9524, "recall@5": 0.8750, "mrr": 0.8262, "ndcg@10": 0.8075, "n_chunks": 150}
+    },
+    "winner_A2": "markdown-400",
+    "A3_prefix_ablation_at_800": {
+      "with_prefix":    {"hit_rate@1": 0.7619, "hit_rate@5": 0.9762, "recall@5": 0.8988, "mrr": 0.8720, "ndcg@10": 0.8458},
+      "without_prefix": {"hit_rate@1": 0.6190, "hit_rate@5": 1.0000, "recall@5": 0.9048, "mrr": 0.7837, "ndcg@10": 0.7915},
+      "ndcg@10_delta": 0.0543
+    },
+    "A4_failure_case": null
+  },
+
+  "B_retrieval": {
+    "chunking_used": "markdown-400",
+    "B1_overall": {
+      "dense":  {"hit_rate@1": 0.7857, "hit_rate@5": 0.9762, "recall@5": 0.9028, "mrr": 0.8800, "ndcg@10": 0.8527, "latency_p95_ms": 0.40},
+      "bm25":   {"hit_rate@1": 0.4762, "hit_rate@5": 0.9286, "recall@5": 0.7956, "mrr": 0.6698, "ndcg@10": 0.6978, "latency_p95_ms": 0.28},
+      "hybrid": {"hit_rate@1": 0.6667, "hit_rate@5": 0.9762, "recall@5": 0.8631, "mrr": 0.7976, "ndcg@10": 0.7949, "latency_p95_ms": 0.58}
+    },
+    "B2_per_kind_mrr": {
+      "aggregation":    {"n": 4,  "dense": 0.8750, "bm25": 0.3750, "hybrid": 0.5833},
+      "multi_hop":      {"n": 10, "dense": 1.0000, "bm25": 0.6500, "hybrid": 0.8167},
+      "paraphrase":     {"n": 5,  "dense": 0.8000, "bm25": 0.4867, "hybrid": 0.6500},
+      "single_hop":     {"n": 18, "dense": 0.9074, "bm25": 0.8519, "hybrid": 0.9444},
+      "trap_archived":  {"n": 3,  "dense": 0.8333, "bm25": 0.5111, "hybrid": 0.6667},
+      "unanswerable":   {"n": 2,  "dense": 0.3125, "bm25": 0.4167, "hybrid": 0.3750}
+    },
+    "B2b_q44_q41": {
+      "Q44_exact_identifier":       {"dense": 0.50, "bm25": 1.00, "hybrid": 1.00},
+      "Q41_paraphrase_no_overlap":  {"dense": 1.00, "bm25": 0.00, "hybrid": 0.25}
+    },
+    "B3_rrf_k_sweep": {"10": 0.8156, "30": 0.7949, "60": 0.7949, "100": 0.7901},
+    "B4_fusion_weights_ndcg@10": {"1:1": 0.7949, "2:1": 0.8068, "1:2": 0.7926, "3:1": 0.8136},
+    "B5_conclusion": "dense alone (0.8527) beats hybrid at every k/weight tried (best hybrid 0.8136); hybrid not adopted"
+  },
+
+  "C_rerank": {
+    "status": "pending",
+    "baseline_no_rerank": null,
+    "cross_encoder": null,
+    "llm_reranker": null,
+    "deployment_decision": {"interactive_agent": null, "batch_job": null},
+    "C4_regression_case": null
+  },
+
+  "D_index": {
+    "D1_exact_vs_hnsw": {
+      "chunking_used": "markdown-400",
+      "exact":      {"hit_rate@1": 0.7857, "recall@5": 0.9028, "ndcg@10": 0.8527, "latency_p95_ms": 0.45},
+      "chroma_hnsw":{"hit_rate@1": 0.7857, "recall@5": 0.9028, "ndcg@10": 0.8527, "latency_p95_ms": 1.38},
+      "quality_gap": 0.0
+    },
+    "D2_scaling_ms": {
+      "base_235_chunks": {"exact_ms": 0.236, "hnsw_ms": 1.353, "ratio": 5.73},
+      "scale_4k": null,
+      "scale_40k": null,
+      "crossover_chunks": null
+    },
+    "D3_metadata_filter_hit_at_1": {
+      "Q29": {"before": 1.0, "after": 1.0, "delta": 0.0},
+      "Q30": {"before": 0.0, "after": 1.0, "delta": 1.0},
+      "Q31": {"before": 1.0, "after": 1.0, "delta": 0.0}
+    }
+  },
+
+  "final_recommended_config": {
+    "chunking": "markdown-aware, 400 chars, prefix retained",
+    "retrieval": "dense only",
+    "reranking": "pending C",
+    "index": "exact NumPy at this corpus size",
+    "metadata": "filter status=archived at query time",
+    "measured": {"ndcg@10": 0.8527, "recall@5": 0.9028, "hit_rate@1": 0.7857, "paraphrase_mrr": 0.80},
+    "meets_targets": true
+  }
+}
