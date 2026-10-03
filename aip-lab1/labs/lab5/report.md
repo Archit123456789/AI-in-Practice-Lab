@@ -1,85 +1,137 @@
-Lab 5: RAG v2 — Diagnose, Fix, Prove
+# Lab 5: RAG v2 — Diagnose, Fix, Prove
 
-Executive Summary
+## Executive Summary
 
-Lab 4's system (reports/lab4.json) had 6 of 45 questions wrong. Every failure was classified into the T4 §5 seven-mode tree using automated checks (gold-context regeneration, chunk-level presence at k=12/k=30, self-retrieval probes). The dominant cluster (generation, 4 of 6) was targeted with a well-motivated, free fix: wiring up a previously-unused final_k parameter to actually narrow the generator's context from 12 chunks to 5. The fix made correctness worse by 0.050 and introduced a genuine refusal-precision regression. This is reported as the primary result, not hidden — per the lab's own grading standard, a diagnosed and measured failure scores above an unexplained success.
+Lab 4 had **6/45 failures**. Failure analysis identified **Mode 6 (generation)** as the dominant cluster (**4/6, 66.7%**).
 
-Part A: Failure Classification
+The selected fix was to activate the unused `final_k` parameter and reduce the generator context from **12 → 5 chunks**. The fix was expected to recover 2/4 Mode-6 failures.
 
-Tally (n=6 failures out of 45):
+The result was negative: **correctness decreased from 0.925 → 0.875 (-0.050)** and failures increased from **6 → 9**. None of the four targeted failures were recovered. The fix reduced cost and latency but introduced new correctness and refusal-precision regressions.
 
-mode 6  generation           n = 4   (Q11, Q23, Q29, Q32 — see correction below)
-mode 4  ranking              n = 1   (Q04)
-mode 3  embedding mismatch   n = 1   (Q37)
-mode 1/2/5/7                 n = 0
-Pareto: generation 66.7%, ranking 16.7%, embedding mismatch 16.7% — two-thirds concentrated in one mode, consistent with starting from Lab 3's winning retriever (per OVERVIEW.md's own reference distribution of 93% mode-6).
+---
 
-The mode-6 test, done correctly: for every failure, answer_with_gold_context() was actually re-run and re-judged — not approximated. gold_context_fixes_it == True means retrieval starved a capable generator (a retrieval failure); only a confirmed False counts as mode 6. Q11 confirmed False directly.
+## Part A — Failure Classification
 
-A caught methodology bug before it caused a bad diagnosis: an early version of in_top_30 checked document-level presence ("is any chunk of the right document anywhere in the top 30"). On this corpus a relevant document splits into 9–18 topically-similar chunks, so this check returned "yes, rank 1" even when the specific fact-bearing chunk was nowhere near the top 30 — a false positive that would have pointed at "raise k" as the fix for cases where raising k does nothing. Fixed by identifying the specific gold chunk via lexical overlap with the gold answer (verified correct on Q37: correctly picks the one chunk mentioning the Platinum international benefit out of 19 candidates) and tracking that chunk's rank instead of the document's.
+| Mode    | Failure Type       | Questions          |  n |
+| ------- | ------------------ | ------------------ | -: |
+| 6       | Generation         | Q11, Q23, Q29, Q32 |  4 |
+| 4       | Ranking            | Q04                |  1 |
+| 3       | Embedding mismatch | Q37                |  1 |
+| 1/2/5/7 | —                  | —                  |  0 |
 
-A2 — needs_human_check: none in this run. Every case resolved to an automated branch (no mode-2 candidates).
+**Mode 6 = 66.7%**, making it the largest failure cluster.
 
-A1 improved (mode 1 test): the shipped answer_in_corpus drops every token ≤4 characters, silently excluding every number a gold answer might depend on. Fixed to require all of a gold answer's numbers to appear in the relevant documents' text before falling back to word overlap — verified against Q37, where the specific limit value doesn't exist anywhere in the corpus.
+Mode-6 classification used actual `answer_with_gold_context()` regeneration and re-judging. A failure was classified as Mode 6 only when gold context did **not** fix it.
 
-Part B: Ranking by Expected Value
+An early bug in `in_top_30` was corrected. The original check tested document-level presence, which could give false positives because relevant documents contain many similar chunks. The final check identifies the **specific fact-bearing gold chunk** using lexical overlap and tracks its rank.
 
-Cluster	n	Fix	Est. recovery	Cost Δ	Latency Δ	Effort
-6 generation	4	Wire up unused final_k: truncate context to top 5	2 of 4	cheaper	faster	trivial
-4 ranking	1	Raise retrieval k 12→30	0–1 of 1	slightly more	slower	trivial
-3 embedding mismatch	1	Hybrid BM25+dense	0–1 of 1	+1 call	+latency	moderate
-Pick: mode 6. It is the largest cluster and has the cheapest fix — no tension between size and cost here. final_k was discovered to be a dead parameter: answer_question() accepted it but never applied it, so all 12 retrieved chunks reached the generator regardless. Fixing this is a one-line change that reduces token usage rather than adding cost.
+The Mode-1 corpus check was also fixed because the original implementation dropped tokens ≤4 characters, potentially removing important numerical values.
 
-Prediction, written before implementing:
+**Human review required: none.**
 
-I expect narrowing context to final_k=5 to recover 2 of the 4 mode-6 failures (Q04, Q23). I don't expect it to fix Q11 (confirmed generation-only, unrelated to context volume) or the mode-4/mode-3 clusters (they need different fixes entirely).
-Part C: The Fix
+---
 
-Implemented: labs/lab4/rag.py::answer_question() — retrieve k=12 for recall, then hits = retriever.search(question, k=k)[:final_k] before building context, instead of passing all k hits through unconditionally.
+## Part B — Fix Selection
 
-One variable changed. No retrieval, chunking, or prompt changes alongside it.
+| Cluster             |  n | Fix                  | Expected Recovery | Effort   |
+| ------------------- | -: | -------------------- | ----------------: | -------- |
+| Mode 6 — Generation |  4 | `final_k`: 12 → 5    |               2/4 | Trivial  |
+| Mode 4 — Ranking    |  1 | Retrieval k: 12 → 30 |             0–1/1 | Trivial  |
+| Mode 3 — Embedding  |  1 | Hybrid BM25 + dense  |             0–1/1 | Moderate |
 
-Part D: Proof
+**Selected: Mode 6**
 
-D1 — Before/after, every Lab 4 metric
+Reason: it was the largest failure cluster and the cheapest intervention. `final_k` was previously unused, so activating it required only a minimal change.
 
-Metric	v1 (before)	v2 (after)	Δ
-Correctness (normalized)	0.925	0.875	−0.050
-Faithfulness	0.933	0.956	+0.023
-Citation validity	1.000	1.000	0.000
-Refusal recall (full)	0.600	0.800	+0.200
-Refusal precision (full)	1.000	0.800	−0.200
-Refusal recall (incl. partial)	1.000	1.000	0.000
-Refusal precision (incl. partial)	1.000	0.625	−0.375
-nDCG@10	0.860	0.860	0.000 (retrieval untouched, as expected)
-Recall@5	0.903	0.903	0.000
-Cost/query	$0.0122	$0.0108	−$0.0014 (cheaper, as predicted)
-p95 latency	5463 ms	5248 ms	−215 ms
-By question kind (correctness/2): aggregation, multi_hop, single_hop, and trap_archived were unchanged. Paraphrase dropped from a perfect 1.000 to 0.800 — a previously fully-passing kind now has a failure.
+### Prediction
 
-D2 — Regression check
+Expected `final_k=5` to recover **Q04 and Q23**, while Q11 and the other failure modes would remain unchanged.
 
-Correctness got worse, prominently: −0.050, the headline number, not a footnote.
+---
 
-Refusal precision collapsed (1.000 → 0.625 including partials): narrower context made the system less confident on borderline answerable questions, and it declined 3 of 8 times where it should have answered. This is exactly the mechanism OVERVIEW.md warns about — "better retrieval [here: a context-volume change] often makes a system refuse less confidently on borderline cases," manifesting as new wrongful refusals rather than new hallucinations.
+## Part C — Implementation
 
-A noise floor was also measured directly, not assumed: a separate --strict run of the identical v2 code produced default refusal recall/precision of 0.600/1.000 — different from the 0.800/0.800 saved in the canonical lab4_v2_after.json from the same code, purely from LLM sampling variance. This is reported as evidence for why the refusal deltas above should not be over-read at n=5, while the correctness delta (measured on n=40 answerable questions, judged deterministically enough to be stable) is trusted.
+Only `labs/lab4/rag.py::answer_question()` was changed:
 
-D3 — Re-classification of remaining failures
+```python
+hits = retriever.search(question, k=k)[:final_k]
+```
 
-v1	v2
-mode 6 (generation)	4	6
-mode 4 (ranking)	1	2
-mode 3 (embedding mismatch)	1	1
-total failures	6	9
-None of the 4 targeted mode-6 failures were recovered (Q04, Q11, Q23, Q29 all still fail). Three new failures appeared that passed in v1: Q20, Q35 (both newly mode 6), and Q44 (newly mode 4) — its fact was reachable within the old 12-chunk window but falls outside the new 5-chunk window. This is not a masked problem becoming visible; it is a new problem this fix created, and it is reported as such rather than reframed as progress.
+Retrieval remained at **k=12**; only the context passed to the generator was reduced to the top 5 chunks.
 
-Q37 (embedding mismatch) is unchanged in both v1 and v2, exactly as predicted — a context-narrowing fix cannot touch a retrieval-side problem, and it didn't.
+No changes were made to retrieval, chunking, embeddings, prompts, or evaluation.
 
-D4 — Next fix
+---
 
-Mode 6 is still the largest cluster after this fix (6 of 9, up from 4 of 6) — the diagnosis was right, the specific fix was wrong. The next attempt should go the opposite direction: keep all 12 chunks available (don't remove candidates the generator might need) but reorder them so the highest-scoring chunk is always first, addressing the "lost in the middle" effect without the recall cost of truncation. Expected worth: modest — the evidence for most of these cases does appear to already reach the generator; the real ceiling is generation quality itself (aggregation and multi-hop correctness were already the weakest kinds before this fix and remained so after), which no context-shape change alone will fully close.
+## Part D — Results
 
-The Fix That Did Not Work
+### Before vs After
 
-Narrowing final_k from 12→5 to reduce distractors: correctness −0.050. Diagnosed correctly (mode 6 was genuinely the dominant cluster, confirmed via real gold-context regeneration, not guessed), predicted honestly before implementing (2 of 4 recovered), and measured completely (every Lab 4 metric, not just the target). The prediction was wrong in direction on the targeted cluster (0 recovered, not 2) and the fix introduced a real regression (3 new failures, refusal precision −0.375) that a narrower before/after — checking only correctness on the 4 targeted questions — would have missed entirely.
+| Metric                      |      v1 |      v2 |           Δ |
+| --------------------------- | ------: | ------: | ----------: |
+| Correctness                 |   0.925 |   0.875 |  **-0.050** |
+| Faithfulness                |   0.933 |   0.956 |      +0.023 |
+| Citation validity           |   1.000 |   1.000 |       0.000 |
+| Refusal recall (full)       |   0.600 |   0.800 |      +0.200 |
+| Refusal precision (full)    |   1.000 |   0.800 |  **-0.200** |
+| Refusal precision (partial) |   1.000 |   0.625 |  **-0.375** |
+| nDCG@10                     |   0.860 |   0.860 |       0.000 |
+| Recall@5                    |   0.903 |   0.903 |       0.000 |
+| Cost/query                  | $0.0122 | $0.0108 | **-0.0014** |
+| p95 latency                 | 5463 ms | 5248 ms | **-215 ms** |
+
+### Failure Reclassification
+
+| Mode                        |    v1 |    v2 |
+| --------------------------- | ----: | ----: |
+| Mode 6 — Generation         |     4 | **6** |
+| Mode 4 — Ranking            |     1 | **2** |
+| Mode 3 — Embedding mismatch |     1 |     1 |
+| **Total**                   | **6** | **9** |
+
+None of the four targeted failures were recovered.
+
+New failures:
+
+* **Q20, Q35:** new Mode-6 failures
+* **Q44:** new Mode-4 failure because its required evidence fell outside the top-5 context
+
+Q37 remained unchanged, as expected, because the embedding/retrieval mechanism was not modified.
+
+---
+
+## Part E — Regression and Noise
+
+The main regression was correctness:
+
+**0.925 → 0.875 (-0.050)**
+
+Refusal precision also decreased substantially. A separate `--strict` run using the same v2 code produced different refusal metrics (**0.600/1.000** vs canonical **0.800/0.800**), demonstrating LLM sampling variance. Therefore, refusal deltas should be interpreted cautiously at this sample size.
+
+The correctness regression is the primary result.
+
+---
+
+## Part F — Next Fix
+
+Mode 6 remains dominant (**6/9 failures**), so generation remains the main area for investigation.
+
+Instead of removing context, the next experiment should:
+
+> **Keep all 12 retrieved chunks but reorder them so the highest-scoring evidence appears first.**
+
+This tests whether context ordering improves generation without sacrificing retrieval coverage.
+
+---
+
+## Conclusion
+
+The `final_k: 12 → 5` fix was **diagnosed correctly but did not work**.
+
+* Correctness: **-0.050**
+* Failures: **6 → 9**
+* Targeted failures recovered: **0/4**
+* Cost/query: **-11.5%**
+* p95 latency: **-215 ms**
+
+The experiment shows that reducing context improved efficiency but **harmed answer correctness**. The next step should preserve retrieval coverage and investigate context ordering or generation quality directly.
