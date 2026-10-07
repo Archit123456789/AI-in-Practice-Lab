@@ -113,3 +113,75 @@ the Word syllabus stay reviewable in a diff and cannot drift from the Markdown.
 
 Everything in `aip/` is under 250 lines per module and is meant to be read.
 There is no framework hiding the interesting parts.
+
+---
+
+## Lab 7 — Running the Aurora Policy Assistant (< 5 minutes on a clean machine)
+
+### Prerequisites
+
+```bash
+git clone <repo-url> aip-lab1
+cd aip-lab1
+pip install -r requirements.txt
+cp .env.example .env       # add your API key (GEMINI_API_KEY or OPENAI_API_KEY)
+```
+
+### 1 — Start the service
+
+```bash
+uvicorn labs.lab7.service:app --reload --port 8000
+```
+
+The first start embeds the corpus (~160 chunks). Subsequent starts are instant (embeddings cached).
+
+### 2 — Ask a question (curl)
+
+```bash
+curl -s http://localhost:8000/ask \
+  -H 'content-type: application/json' \
+  -d '{"question":"How long do I have to file a claim?"}' | python -m json.tool
+```
+
+### 3 — Start the Streamlit UI
+
+```bash
+streamlit run labs/lab7/ui.py
+```
+
+Open http://localhost:8501 in your browser.
+
+### 4 — Start the observability dashboard
+
+```bash
+streamlit run labs/lab7/dashboard.py --server.port 8502
+```
+
+### 5 — Run the regression gate
+
+```bash
+python labs/lab7/gate.py --config labs/lab7/thresholds.yml
+```
+
+To run offline (CI mode — no API key needed, replays committed cache):
+
+```bash
+AIP_OFFLINE=1 python labs/lab7/gate.py --config labs/lab7/thresholds.yml
+```
+
+### 6 — Deliberately break the gate (D3)
+
+```bash
+# Drop final_k to 1 in labs/lab7/gate.py → _get_pipeline(), then:
+python labs/lab7/gate.py
+# Expected: GATE FAILED (correctness and hit_rate drop below threshold)
+```
+
+### Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `POST /ask` | Main Q&A — returns answer, citations, cost, trace_id |
+| `POST /ask/stream` | SSE streaming — prose first, citations at end |
+| `GET /health` | Index size, model, cache stats, uptime |
+| `GET /metrics` | Cost, latency p50/p95/p99, cache hit rate, error rate |
