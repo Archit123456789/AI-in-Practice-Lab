@@ -113,5 +113,3 @@ The Q37 failure class (2 questions) requires the model to answer the part the co
 Lab 3 measured that a cross-encoder on k=30→5 improves nDCG@10 by ~0.06. The 1 000 ms latency cost is acceptable if generation is first brought below 3 s by change 1. This is ranked third because the current retrieval is already above the gate threshold and the gain is marginal relative to the cost.
 
 ---
-
-*Report generated: 2026-10-07. Metrics are reproducible from the committed cache (`AIP_OFFLINE=1 python labs/lab7/gate.py`).*
